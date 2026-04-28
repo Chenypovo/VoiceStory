@@ -45,6 +45,15 @@ class StoryGenerator:
             return json.load(f)["text"]
 
     def from_prompt(self, prompt: str) -> str:
+        if config.MOCK_MODE:
+            return (
+                f"【Mock 模式 - 需要设置 BAILIAN_API_KEY 才能真正生成】\n\n"
+                f"从前，有一只{prompt}。它每天都在森林里快乐地生活着。"
+                f"一天，它遇到了一只善良的小鸟，小鸟带它去了最美的地方。"
+                f"从此它们成了最好的朋友，每天都一起看星星。"
+                f"晚安，做个好梦。"
+            )
+
         response = self.client.chat.completions.create(
             model=config.LLM_MODEL,
             messages=[

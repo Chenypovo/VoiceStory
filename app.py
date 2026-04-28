@@ -55,6 +55,8 @@ def get_preset_options():
 
 with gr.Blocks(title="Voice Story - 声音克隆晚安故事") as demo:
     gr.Markdown("# Voice Story - 声音克隆晚安故事")
+    if config.MOCK_MODE:
+        gr.Markdown("**Mock 模式** — 未检测到 `BAILIAN_API_KEY`，TTS 生成静音音频，故事为模板文本。设置环境变量后可使用真实 API。")
     gr.Markdown("上传声音样本，用克隆的声音朗读故事")
 
     with gr.Row():
