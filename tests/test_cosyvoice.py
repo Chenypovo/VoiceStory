@@ -13,20 +13,18 @@ def provider(monkeypatch):
 
 
 def test_clone_voice_returns_voice_id(provider, tmp_path):
-    monkeypatch_ = pytest.MonkeyPatch()
-    monkeypatch_.setattr(config, "PROFILES_DIR", str(tmp_path))
-    provider._api_key = "test-key"
     ref_audio = tmp_path / "ref.wav"
     ref_audio.write_bytes(b"fake audio bytes")
-    voice_id = provider.clone_voice(str(ref_audio), "test-speaker")
+    with patch("providers.cosyvoice._upload_to_oss", return_value="oss://fake/url.wav"):
+        with patch.object(provider, '_voices', {}):
+            voice_id = provider.clone_voice(str(ref_audio), "test-speaker")
     assert voice_id
     assert "test-speaker" in voice_id
-    monkeypatch_.undo()
 
 
 def test_synthesize_calls_api_and_returns_path(provider, tmp_path, monkeypatch):
     monkeypatch.setattr("providers.cosyvoice.OUTPUTS_DIR", str(tmp_path))
-    provider._voices["voice-123"] = "/fake/path.wav"
+    provider._voices["voice-123"] = {"local_path": "/fake/path.wav", "oss_url": None}
 
     mock_audio_resp = MagicMock()
     mock_audio_resp.content = b"fake wav data"
@@ -46,8 +44,36 @@ def test_synthesize_calls_api_and_returns_path(provider, tmp_path, monkeypatch):
     assert os.path.exists(output_path)
 
 
+def test_synthesize_with_voice_cloning(provider, tmp_path, monkeypatch):
+    monkeypatch.setattr("providers.cosyvoice.OUTPUTS_DIR", str(tmp_path))
+    provider._voices["voice-123"] = {
+        "local_path": "/fake/path.wav",
+        "oss_url": "oss://bucket/ref.wav",
+    }
+
+    mock_audio_resp = MagicMock()
+    mock_audio_resp.content = b"fake wav data"
+
+    mock_api_resp = MagicMock()
+    mock_api_resp.status_code = 200
+    mock_api_resp.json.return_value = {
+        "output": {"audio": {"url": "https://example.com/audio.wav"}},
+    }
+
+    with patch("providers.cosyvoice.requests") as mock_requests:
+        mock_requests.post.return_value = mock_api_resp
+        mock_requests.get.return_value = mock_audio_resp
+        output_path = provider.synthesize("你好世界", "voice-123")
+
+    # Verify ref_audio_url was included in the API call
+    call_args = mock_requests.post.call_args
+    payload = call_args[1]["json"] if "json" in call_args[1] else call_args[0][0]
+    assert payload["input"]["ref_audio_url"] == "oss://bucket/ref.wav"
+    assert output_path.endswith(".wav")
+
+
 def test_synthesize_raises_on_api_error(provider, monkeypatch):
-    provider._voices["voice-123"] = "/fake/path.wav"
+    provider._voices["voice-123"] = {"local_path": "/fake/path.wav", "oss_url": None}
 
     mock_api_resp = MagicMock()
     mock_api_resp.status_code = 400

@@ -34,16 +34,38 @@ def _generate_silence_wav(duration_seconds: float = 2.0, sample_rate: int = 1600
     return header + data
 
 
+def _upload_to_oss(file_path: str, api_key: str) -> str:
+    """Upload a local audio file to DashScope OSS and return the oss:// URL."""
+    import dashscope
+    from dashscope.utils.oss_utils import OssUtils
+    dashscope.api_key = api_key
+    dashscope.base_http_api_url = 'https://dashscope-intl.aliyuncs.com/api/v1'
+    file_url, _ = OssUtils.upload(
+        model=config.TTS_MODEL,
+        file_path=file_path,
+        api_key=api_key,
+    )
+    return file_url
+
+
 class CosyVoiceProvider(TTSProvider):
     def __init__(self, api_key: str = None):
         self._api_key = api_key or config.DASHSCOPE_API_KEY
-        self._voices: dict = {}
+        self._voices: dict = {}  # voice_id -> {"local_path": str, "oss_url": str|None}
 
     def clone_voice(self, audio_path: str, name: str) -> str:
         voice_id = f"{name}-{uuid.uuid4().hex[:8]}"
         dest = os.path.join(config.PROFILES_DIR, f"{voice_id}.wav")
         shutil.copy2(audio_path, dest)
-        self._voices[voice_id] = dest
+
+        oss_url = None
+        if not config.MOCK_MODE:
+            try:
+                oss_url = _upload_to_oss(dest, self._api_key)
+            except Exception:
+                pass  # Fall back to default voice if upload fails
+
+        self._voices[voice_id] = {"local_path": dest, "oss_url": oss_url}
         return voice_id
 
     def synthesize(self, text: str, voice_id: str) -> str:
@@ -53,14 +75,18 @@ class CosyVoiceProvider(TTSProvider):
         if config.MOCK_MODE:
             return self._mock_synthesize(text)
 
-        payload = {
-            "model": config.TTS_MODEL,
-            "input": {
-                "text": text,
-                "voice": config.TTS_VOICE_DEFAULT,
-                "language_type": "Chinese",
-            },
+        voice_info = self._voices[voice_id]
+
+        input_data = {
+            "text": text,
+            "voice": config.TTS_VOICE_DEFAULT,
+            "language_type": "Chinese",
         }
+        # Use voice cloning if OSS URL is available
+        if voice_info.get("oss_url"):
+            input_data["ref_audio_url"] = voice_info["oss_url"]
+
+        payload = {"model": config.TTS_MODEL, "input": input_data}
         headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
@@ -93,4 +119,4 @@ class CosyVoiceProvider(TTSProvider):
 
     def register_existing(self, voice_id: str, audio_path: str):
         if os.path.exists(audio_path):
-            self._voices[voice_id] = audio_path
+            self._voices[voice_id] = {"local_path": audio_path, "oss_url": None}
