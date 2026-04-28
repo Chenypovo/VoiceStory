@@ -3,6 +3,7 @@ import os
 import struct
 import uuid
 import shutil
+import requests
 import config
 from providers.tts_base import TTSProvider
 
@@ -46,38 +47,39 @@ class CosyVoiceProvider(TTSProvider):
         return voice_id
 
     def synthesize(self, text: str, voice_id: str) -> str:
-        ref_audio_path = self._voices.get(voice_id)
-        if not ref_audio_path:
+        if voice_id not in self._voices:
             raise ValueError(f"Voice '{voice_id}' not registered")
 
         if config.MOCK_MODE:
             return self._mock_synthesize(text)
 
-        import dashscope
-        from dashscope import SpeechSynthesizer
-        dashscope.api_key = self._api_key
-
-        kwargs = {
+        payload = {
             "model": config.TTS_MODEL,
-            "voice": config.TTS_VOICE_DEFAULT,
-            "text": text,
-            "format": "wav",
+            "input": {
+                "text": text,
+                "voice": config.TTS_VOICE_DEFAULT,
+                "language_type": "Chinese",
+            },
         }
-        if ref_audio_path and os.path.exists(ref_audio_path):
-            kwargs["ref_audio_path"] = ref_audio_path
-            kwargs["ref_text"] = "这是一段参考音频。"
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+        resp = requests.post(config.TTS_API_URL, json=payload, headers=headers, timeout=60)
+        resp_json = resp.json()
 
-        response = SpeechSynthesizer.call(**kwargs)
-        if response.status_code != 200:
-            raise RuntimeError(
-                f"CosyVoice API error: {response.code} - {response.message}"
-            )
+        if resp.status_code != 200 or "error" in resp_json:
+            code = resp_json.get("code", resp.status_code)
+            message = resp_json.get("message", resp_json.get("error", {}).get("message", "unknown"))
+            raise RuntimeError(f"TTS API error: {code} - {message}")
+
+        audio_url = resp_json["output"]["audio"]["url"]
+        audio_resp = requests.get(audio_url, timeout=60)
 
         output_filename = f"{uuid.uuid4().hex}.wav"
         output_path = os.path.join(OUTPUTS_DIR, output_filename)
-        audio_data = response.get_audio()
         with open(output_path, "wb") as f:
-            f.write(audio_data)
+            f.write(audio_resp.content)
         return output_path
 
     def _mock_synthesize(self, text: str) -> str:
